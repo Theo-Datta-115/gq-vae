@@ -1,0 +1,19 @@
+# Ignore all __pycache__ directories
+__pycache__/
+
+# Ignore all .pyc files
+*.pyc
+
+# Other
+*.txt
+!requirements.txt
+wandb/
+*.pth
+*.pt
+
+#For batch jobs
+*.out
+*.err
+
+#For the tinystories data file
+/tokenized_data
