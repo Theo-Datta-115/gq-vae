@@ -1,3 +1,7 @@
+"""
+
+"""
+
 from torch.utils.data import DataLoader, TensorDataset, Dataset
 import torch
 import numpy as np
@@ -79,22 +83,22 @@ def save_data(dataset, reg, i, split):
 
 def regex_rule(normalization_rule_name: str) -> str:
     # GPT4 regex
-    if normalization_rule_name == "gpt": #USED
+    if normalization_rule_name == "gpt": 
         return r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
     # limits to 2 digits (use for vocab size < 50k to ensure full digit coverage)
     elif normalization_rule_name == "gpt-num2":
         return r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
     # separates punctuation from words (except spaces)
-    elif normalization_rule_name == "punct": #USED
+    elif normalization_rule_name == "punct": 
         return r""" ?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
     # limits to 2 digits (use for vocab size < 50k to ensure full digit coverage)
     elif normalization_rule_name == "punct-num2":
         return r""" ?\p{L}+|\p{N}{1,2}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"""
     # gpt 2 regex 
-    elif normalization_rule_name == "gpt2": #USED
+    elif normalization_rule_name == "gpt2": 
         return r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
     # whitespace break
-    elif normalization_rule_name == "whitespace": #USED
+    elif normalization_rule_name == "whitespace": 
         return r'\s+'
     else:
         raise ValueError(f"Unknown normalization_rule_name {normalization_rule_name}")
