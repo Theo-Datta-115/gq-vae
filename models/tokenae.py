@@ -44,6 +44,8 @@ class TokenAE(nn.Module):
         self.encoder = Encoder(D)
         self.decoder = Decoder(D, self.n_embeddings, kernel_size)
         self.vector_quantization = VectorQuantizer(vocab_size, D, alpha, beta)
+
+        # These are deprecated methods to improve the VQ for spped/training
         # self.vector_quantization = DecompQuantizer(8, vocab_size, D, alpha, beta)
         # self.pq_quantization = VectorQuantization(dim=D, codebook_size=10000, commitment_weight=beta, kmeans_iters=500)
         # self.pq_quantization = VectorQuantization(dim=int(D / 4), codebook_size=[16, 16, 16, 16], commitment_weight=beta, kmeans_iters=500)
@@ -78,7 +80,7 @@ class TokenAE(nn.Module):
         # hardset[torch.arange(x.size(0)), first_zeros] = 1
         # gates = torch.clamp(gates + hardset, max=1.0)
 
-        # HARDSET EVERY XTH GATE (UNTIL PADS) – Effectively hard sets fixed-length chunks
+        # HARDSET EVERY XTH GATE (UNTIL PADS) – Effectively hard sets fixed-length chunks. Used to gurantee no information loss in the model, and to lower training problem complexity.
         if hardset:
             gates = self.hardset_func(first_zeros, hardset)
 

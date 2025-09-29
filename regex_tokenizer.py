@@ -1,3 +1,15 @@
+"""
+This is the pipeline to load a model save as an instance of a Huggingface tokenizer. What is included in the file: 
+
+- LearnedTokenizer Class. Takes a savefile, and appropriately computes the encoding/decoding functions. If process_vocab is True, this also saves vocab maps (such as vocab_regex and vocab_regex_map). 
+    - Encode: Encodes text inputs to tokens. If vocab_fallback is true, it uses dynamic fallback to ensure 100% reconstruction accuracy.
+    - Decode: Decodes from vocab list.
+    - Encode_loader: same as encoder, but with a dataloader input for speed
+    - GetDict: Distill the VQ dictionary and the mask length predictions into a deterministic, fixed vocab.
+    - FallBack: Deterministic fallabck system that looks for working partial words in the vocab and then defaults to single characters
+- tokenize_dataset and tokenize_dataset_val: functions for efficiently tokenizing the entirety of tinystories. Needs both the DATA_PATH and MODEL_PATH to be hardset in this file.
+"""
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -51,24 +63,23 @@ class LearnedTokenizer(PreTrainedTokenizer):
         gpt2 = re.compile(r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
         words = re.findall(gpt2, text)
 
-        #THRESHOLD LENGTH
+        # Do data pre-cleaning, to align with model training
         words = [word for word in words if len(word) <= 16]
-        words.append('                ') #ensure that there is a len 16 word
+        words.append('                ') #ensure that there is a len 16 word for accuracy
         chrs = [torch.tensor([ord(char) for char in word if ord(char) <= 128]) for word in words]
         x = r.pad_sequence(chrs, batch_first=True)
         x = x[:-1]
 
-        #TODO Implement fallback here, using the whole model call 
+        # Pass data through the model
         (recon_loss, _, _, _, _), x_hat, _, corr_token, gates, _, pred_mask_lens, masks, (min_encodings, correct_used_tokens, targets) = self.model(x, tokenizing=True, hardset=self.args['hardset'])
-        # print("Encodign Compression is: " + str(corr_token[4].cpu().item()))
         
+        # Reconstruct the hard mask lengths predictions from the model mask prediction outputs
         mask_lens = ((masks > 0.5).float().sum(axis=2)).flatten()
         mask_lens_gated = mask_lens[gates.flatten() > 0.5]
         min_encodings_flattened = min_encodings[gates.flatten() > 0.5]
         pred_lens_flattened = ((pred_mask_lens.argmax(1) + 1).flatten())[gates.flatten() > 0.5]
-        # self.lens_freq.append((min_encodings_flattened * mask_lens_gated.view(-1, 1)))
-        # self.pred_lens_freq.append((min_encodings_flattened * pred_lens_flattened.view(-1, 1)))
         
+        # Reconstruct the tokens into the used characters, and then gate which tokens to use by the gater
         tokens = torch.argmax(min_encodings.reshape(-1, self.args['vocab_size']), dim=1).int()
         tokens = tokens[gates.flatten() > 0.5]
 
@@ -76,22 +87,20 @@ class LearnedTokenizer(PreTrainedTokenizer):
         tokens = list(map(lambda x: self.vocab_map[x], tokens.tolist()))
 
         if self.vocab_fallback:
+            # Tell you where there is an incorrect token that needs to be fixed, using ground truth labels
             incorrect = ~torch.all(correct_used_tokens, dim=1)
-            # print("inc", torch.sum(incorrect))
-            # print("inc %", torch.sum(incorrect) / len(incorrect))
             inc_tok = (targets * (masks > 0.5))[(gates > 0.5)][incorrect]
             replace = incorrect * (torch.arange(len(incorrect)) + 1).to(self.device)
-            # print("arr", torch.arange(len(incorrect)))
-            # print("rep", replace)
             replace = replace[replace != 0] - 1
 
-            # print("rep", replace)
+            # For each token that needs to be replaced, fight the optimal combinations of tokens from vocab to correctly reconstruct it. 
             for i, rep in enumerate(reversed(replace)):
                 out = self.fallBack(inc_tok[len(replace) - i - 1])
                 tokens[rep:rep+1] = out
     
         return tokens
 
+    # Encoder that allows you to use a dataloader, and therefore more effectively chunk text inputs and group data pre-processing for faster tokenization
     def encode_loader(self, loader, iters):
         chars = 0
         toks = 0
@@ -234,7 +243,7 @@ class LearnedTokenizer(PreTrainedTokenizer):
         print(len(torch.unique(vocab_reduced)))
 
 
-def tokenize_dataset_loader(path):
+def tokenize_dataset_loader(path, data_path="PATH"):
     tokenizer = LearnedTokenizer(model_save=path, process_vocab=False, vocab_fallback=True)
     dataset = load_dataset("roneneldan/TinyStories", split='train[:1%]')
     
@@ -257,17 +266,13 @@ def tokenize_dataset_loader(path):
         print(tokens)
 
         np_data = np.array(tokens)
-        memmap_file = np.memmap('/n/home03/tdatta/tank-vae/tokenized_data/tinystories' + str(i) + '.npy', dtype='uint16', mode='w+', shape=np_data.shape)
+        memmap_file = np.memmap(data_path + str(i) + '.npy', dtype='uint16', mode='w+', shape=np_data.shape)
         memmap_file[:] = np_data
         memmap_file.flush()
 
-"""
-/n/netscratch/sham_lab/Everyone/tdatta/tokenae/2k_vocab/tinystories_tokenized
-/n/netscratch/sham_lab/Everyone/tdatta/tokenae/2k_vocab/tinystories_bpe
-"""
 
-
-def tokenize_dataset(path, start):
+# Function to load the train dataset of tinystories and tokenize it
+def tokenize_dataset(path, start, data_path="PATH"):
     tokenizer = LearnedTokenizer(model_save=path, process_vocab=False, vocab_fallback=True)
     dataset = load_dataset("roneneldan/TinyStories", split='train')
 
@@ -277,8 +282,7 @@ def tokenize_dataset(path, start):
     dataset = dataset['text'][start: end]
     
     tokenized_data = []
-    path = "/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/hardset_3/train/"
-    # tinystories_tokenized_val and tinystories_bpe_val
+    path = data_Path
 
     data_lens = 0
 
@@ -286,19 +290,11 @@ def tokenize_dataset(path, start):
         i = i + start
         if data != "":
             progress = 0
-
-            # print(len(data))
-            # print(f"Allocated memory: {torch.cuda.memory_allocated()/1024**2:.2f} MB")
-            # print(f"Cached memory: {torch.cuda.memory_reserved()/1024**2:.2f} MB")
             data_lens += len(data)
             tokens = tokenizer.encode(data)
             tokenized_data.extend(tokens)
             tokenized_data.append(tokenizer.vocab['[EOS]'])
 
-            # print(data_lens / len(tokenized_data))
-
-            # if (i % (int(total / 5))) == 0:
-            #     print("SAVING")
     #Write to Memmap
     np_data = np.array(tokenized_data)
     memmap_file = np.memmap(path + str(i) + '.npy', dtype='uint16', mode='w+', shape=np_data.shape)
@@ -308,7 +304,8 @@ def tokenize_dataset(path, start):
     #Reset data
     tokenized_data = []
 
-def tokenize_dataset_val(path, data='tinystories'):
+# Function to load the val dataset of tinystories and tokenize it
+def tokenize_dataset_val(path, data_path="PATH", data='tinystories'):
     tokenizer = LearnedTokenizer(model_save=path, process_vocab=False, vocab_fallback=True)
     print("VOCAB", len(tokenizer.vocab))
     
@@ -322,129 +319,35 @@ def tokenize_dataset_val(path, data='tinystories'):
         dataset = [d['text'] for d in ds][0:300]
 
     tokenized_data = []
-    path = "/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/hardset_3/val/"
+    path = data_path
 
-    unique_set = set()
     data_lens = 0
     for i, data in enumerate(tqdm(dataset)):
         if data != "":
-            # if len(data) > 2000:
-            #     print("hi")
-            #     data = data[:2000]
             data_lens += len(data)
-            # print("__________")
             tokens = tokenizer.encode(data)
             tokenized_data.extend(tokens)
             tokenized_data.append(tokenizer.vocab['[EOS]'])
-            # unique_set.update(torch.unique(torch.tensor(tokens)).tolist())
-            # print(data_lens / len(tokenized_data))
-            # print(tokenizer.decode(tokens))
-            # print("used", len(tokens))
-            # print("comp", len(data) / len(tokens))
 
-    # lens_freq = torch.cat(tokenizer.lens_freq)
-    # pred_lens_freq = torch.cat(tokenizer.pred_lens_freq)
-    # print(torch.sum(pred_lens_freq != lens_freq))
-    # print(torch.sum(pred_lens_freq != lens_freq) / len(tokenized_data))
     data = "".join(dataset)
-    # print(len(data) / len(tokenized_data))
-    # print("used tokens", len(torch.tensor(list(unique_set))))
     np_data = np.array(tokenized_data)
     memmap_file = np.memmap(path + 'data.npy', dtype='uint16', mode='w+', shape=np_data.shape)
     memmap_file[:] = np_data
     memmap_file.flush()
 
-model_paths = [
-    '/n/home03/tdatta/tank-vae/results/1024_gpt2/20000.pth', 
-    '/n/home03/tdatta/tank-vae/results/1024_gpt2_2k/20000.pth',
-    '/n/home03/tdatta/tank-vae/results/1024_gpt2_5k/20000.pth',
-    '/n/home03/tdatta/tank-vae/results/1024_gpt2_10k/20000.pth',
-    '/n/home03/tdatta/tank-vae/results/1024_gpt2_20k/20000.pth']
-
-model_paths_retry = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000/15000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/10000.pth',
-]
-
-model_paths_c4 = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/5000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/10000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/15000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/20000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/2_50000/25000.pth'
-]
-
-model_paths_lr = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000difflr/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_2000difflr/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_5000difflr/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_10000difflr/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_20000difflr/25000.pth',
-]
-
-model_paths_lr_2 = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000ts_newschej2/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_20000tinystories/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_10000tinystories/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_5000ts_seed3/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_2000tinystories/35000.pth',
-]
-
-model_paths_perms = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000ts_d1024/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000mask_hardcode/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000maskpads_hardset_sweep/25000.pth'
-]
-
-model_paths_hardset = [
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_50000mask_hardcode/25000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_20000hardset_sweep/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_10000hardset_sweep/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_5000hardset_sweep/35000.pth',
-    '/n/holyscratch01/sham_lab/tokenae/retry/saves/3_2000hardset_sweep/35000.pth'
-]
-
-model_paths_rotate = [
-    '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/3_50000rot_trick/65000.pth',
-    '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/4_50000rot_trick/65000.pth'
-]
-
-model_paths_5k = [
-    '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/3_50000dim_tokens_4x/125000.pth',
-    # '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/3_5000dim_sweep_long_512/65000.pth',
-    # '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/3_5000dim_sweep_long_720/65000.pth',
-    # '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/3_5000dim_sweep_long_1024/65000.pth',
-    # '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/2_50000alpha_sweep_again/65000.pth',
-]
 
 if __name__ == "__main__":
-    # for path in model_paths_5k:
-    #     tokenize_dataset_val(path)
-
-    # tokenizer = LearnedTokenizer(model_save = '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/2_50000h8/20000.pth', process_vocab=True, vocab_fallback=True)
-    # print("HARDSET", tokenizer.args['hardset'])
-    # tokens = tokenizer.encode("I really hope that this tokenizes things well and has a good way of doing fallback!")
-    # print(tokens)
-    # text = tokenizer.decode(tokens)
-    # print(text)
-
+    MODEL_PATH = "PATH"
 
     parser = argparse.ArgumentParser(description="Process some files.")
     parser.add_argument('--start', type=str, default=0.0)
     parser.add_argument('--val', type=bool, default=False)
     args = parser.parse_args()
-    # tokenizer = LearnedTokenizer(model_save='/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/2_20000h8_sweep/30000.pth', process_vocab=True, vocab_fallback=True)
-    # toks = tokenizer.encode("hello, amazing, superb!")
-    # print(toks)
-    # print(tokenizer.decode(toks))
 
     if args.val:
-        tokenize_dataset_val('/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/2_20000h8_sweep/30000.pth')
+        tokenize_dataset_val(MODEL_PATH)
     else:
-        print("START:", args.start)
-        tokenize_dataset('/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/2_20000h8_sweep/30000.pth', float(args.start))
-
-
+        tokenize_dataset(MODEL_PATH, float(args.start))
 
 # Example usage 
 # tokenizer = LearnedTokenizer(model_save=model_paths[4], process_vocab=True, vocab_fallback=True)
@@ -454,24 +357,3 @@ if __name__ == "__main__":
 # print(tokens)
 # text = tokenizer.decode(tokens)
 # print(text)
-
-
-"""
-
-dataset = load_dataset("roneneldan/TinyStories", split='train[:1%]')
-for data in tqdm(dataset['text']):
-    # print("___________________________________")
-    
-    # print(data)
-    tokens = tokenizer.encode(data)
-    # print(tokens)
-    text = tokenizer.decode(tokens)
-    # print(text)
-
-
-
-CONSIDER DOING ANOTHER REGEX IN THE VOCAB TO PREVENT FOR TWO SPACES IN FRONT OF NON-SPACE CHARACTERS
-
-
-/n/netscratch/sham_lab/Everyone/tdatta
-"""

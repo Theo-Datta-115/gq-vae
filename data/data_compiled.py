@@ -1,5 +1,13 @@
 """
+This file is used for managing of data-related functions. It has two main types of functionality:
+- Data pre-processing, in the "save_data" function. This saves data, with the following preprocessing:
+    - if use_ascii=True, data will use ascii labels, otherwise it will use bytes
+    - data will be pre-split by the regular expression chosen from regex_rule
+    - data will use the "split" parameter to choose what of tinystories to pretokenize ([:10%] as an example)
+    - the "i" parameter lets you number multiple chunks so you can break up the pre-tokenization process
+- Data loading: allows you  to load your dataset into a dataloader for model training, used in the main function
 
+On the calling of this file, it is set to do pre-tokenization into the PATH folder, breaking tinystories into 10 chunks.
 """
 
 from torch.utils.data import DataLoader, TensorDataset, Dataset
@@ -12,31 +20,16 @@ import json
 from datasets import load_dataset
 import os 
 
-"""
-List of paths for data (I THINK THIS IS TOKENIZED WITH BOS/EOS!!!): 
-- /n/holyscratch01/sham_lab/tokenae/regex10p : GPT2 regex
-- /n/holyscratch01/sham_lab/tokenae/whitespace10p : whitespace regex
-- /n/holyscratch01/sham_lab/tokenae/gpt_4_10p : GPT4 regex 
-- /n/holyscratch01/sham_lab/tokenae/punct_10p : punct regex 
-    c4_gpt2
-"""
-
 TRAIN_PERCENT = .9
+PATH = "" #ADD
 
 def load_data(dataset, batch_size, partitions):
     if dataset == "tinystories":
-        folder_path = '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/pre_data/ascii'
+        folder_path = PATH + '/pre_data/ascii'
         files = [f for f in os.listdir(folder_path) if f.endswith('.pt')]
         files.sort() 
         data = [torch.load(os.path.join(folder_path, files[i])) for i in range(partitions)]
         data = torch.cat(data, dim=0)
-
-        # data = data[:int(len(data) / 2)] # for partial data
-
-        # data = torch.load('/n/holyscratch01/sham_lab/tokenae/regex10p.pt', weights_only=True)
-        # data = torch.load('/n/holyscratch01/sham_lab/tokenae/tinystories_gpt2bytes.pt', weights_only=True)
-    elif dataset == "c4":
-        data = torch.load('/n/holyscratch01/sham_lab/tokenae/c4_gpt2.pt', weights_only=True)
     else:
         raise ValueError("Invalid dataset")
 
@@ -52,9 +45,7 @@ def load_data(dataset, batch_size, partitions):
 
     return training_data, validation_data, training_loader, validation_loader
 
-def save_data(dataset, reg, i, split):
-    use_ascii = False
-
+def save_data(dataset, reg, i, split, use_ascii = True):
     print("handling data")
     if dataset == "tinystories": 
         ds = load_dataset("roneneldan/TinyStories", split=('train' + split)).with_format("torch")
@@ -78,9 +69,10 @@ def save_data(dataset, reg, i, split):
         chrs = [word for word in words if len(word) <= 16]
     data = r.pad_sequence(chrs, batch_first=True)
 
-    torch.save(data, '/n/netscratch/sham_lab/Everyone/tdatta/tokenae/pre_data/bytes/' + dataset + '_' + reg + '-' + str(i) + '.pt')
-    print('/n/netscratch/sham_lab/Everyone/tdatta/tokenae/pre_data/bytes/' + dataset + '_' + reg + '_' + str(i) + '.pt')
+    torch.save(data, PATH + '/pre_data/bytes/' + dataset + '_' + reg + '-' + str(i) + '.pt')
+    print(PATH + '/pre_data/bytes/' + dataset + '_' + reg + '_' + str(i) + '.pt')
 
+# Compilation of different regex patterns used in industry or in papers. Allows for playing with the different Regex patterns.
 def regex_rule(normalization_rule_name: str) -> str:
     # GPT4 regex
     if normalization_rule_name == "gpt": 

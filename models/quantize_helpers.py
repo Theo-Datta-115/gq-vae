@@ -1,3 +1,14 @@
+"""
+This file contains the functionality for a majority of the actually used VQ-VAE re-initialization techniques
+The problem this responds to is codebook collapse - models will trend toward low codebook utilization, especially
+when dealing with a large variety of training objectives.
+
+To respond to this, we use Reservoir sampling, to allow the codebook to be dynamically re-initialized. This retains 
+high codebook utilization, and I found it better compared to alternative methods (ex. PQ-VAE or other tricks).
+
+"""
+
+
 #Drawn from this file: https://github.com/distsup/DistSup/blob/master/distsup/modules/bottlenecks.py / the encoders file
 import torch
 from torch import nn
@@ -6,12 +17,6 @@ import time
 import random
 from fast_pytorch_kmeans import KMeans
 
-"""
-Reservoir Sampling achieves the following tasks:
-    1. Stores a running history of the values seen from the encoder
-    2. Can output KMeans++ on this sampling
-    3. Can add samples
-"""
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

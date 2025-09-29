@@ -29,6 +29,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+"""
+This was used as a potential speedup for vector quantization. It did not make the final paper.
+"""
+
+
 """Core vector quantization implementation."""
 from einops import rearrange, repeat
 from torch import nn

@@ -6,6 +6,9 @@ from models.quantize_helpers import ReservoirSampler, VectorResample
 import time
 from models.quantizer import VectorQuantizer
 
+"""
+This was used as a potential speedup for vector quantization. It did not make the final paper.
+"""
 
 class DecompQuantizer(nn.Module):
     """

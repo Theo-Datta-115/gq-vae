@@ -108,6 +108,7 @@ class VectorQuantizer(nn.Module):
         # z_q = z_q.view(B,T,D)
         # d_min, _ = torch.min(d, dim=1)
 
+        # This uses a graph-based reconstruction to allow for faster indexing of vectors from the codebook when it is fixed
         if not self.training:
             # use IVFPQ
             z_perm = z_flattened.permute(1,0).contiguous()
@@ -189,5 +190,3 @@ class VectorQuantizer(nn.Module):
                 self.resample.add(encodings, min_encodings, d)
 
         return (codebook, commitment), z_q, codebook_used, min_encodings
-
-# Taken from https://github.com/LargeWorldModel/ElasticTok/blob/main/elastic/bottleneck.py

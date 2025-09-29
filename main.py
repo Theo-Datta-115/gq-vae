@@ -1,5 +1,3 @@
-#Using https://github.com/MishaLaskin/vqvae/blob/master/main.py as the source
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,6 +15,7 @@ from models.tokenae import TokenAE
 from torch.profiler import profile, record_function, ProfilerActivity
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from utils import CosWithWarmup
+
 # from line_profiler import LineProfiler
 ## FLAGS
 parser = argparse.ArgumentParser()
@@ -101,12 +100,16 @@ def log(results, logging):
         print()
     return results
 
-def train(optimizer, scheduler, training_loader, validation_loader, model, results, val_results):
+def train(optimizer, scheduler, training_loader, validation_loader, model, results, val_results, SAVE_PATH="PATH"):
     model.train()
     for x in training_loader:
         x = x.to(device)
         optimizer.zero_grad()
+
+        # Run the model
         (recon_loss, codebook, commitment, compression, mask_loss), x_hat, codebook_used, corr_token, gates, g_under_half, pred_masks, masks = model(x, iter=results['n_updates'], hardset=args.hardset)
+        
+        # Calculate the joint loss
         loss = recon_loss + compression + mask_loss
         if codebook is not None and commitment is not None:
             loss += codebook + commitment 
@@ -115,18 +118,23 @@ def train(optimizer, scheduler, training_loader, validation_loader, model, resul
         optimizer.step()
         scheduler.step()
 
+        # If needed, save the model and the run data
         if args.save and (results['n_updates'] % 5000 == 0):
-            path =  "/n/netscratch/sham_lab/Everyone/tdatta/tokenae/retry/saves/" + str(int(args.alpha)) + "_" + str(int(args.vocab_size)) + run_name
+            if SAVE_PATH == "PATH":
+                print("Please input a path for model saves, if using args.save, as SAVE_PATH")
+            path = SAVE_PATH
             results_to_save = {'model': model.state_dict(), 'results': results, 'hyperparameters': args.__dict__}
             save(path, results_to_save, results['n_updates'])
 
         if (results['n_updates'] % 1001 == 0) and (results['n_updates'] != 0):
             validate(validation_loader, model, val_results)
 
+        # Log everything (both in console, and if needed, in wandb)
         logging = [loss, recon_loss, codebook, commitment, compression, mask_loss, g_under_half, codebook_used, corr_token[0], corr_token[1], corr_token[2], corr_token[3], corr_token[4], optimizer.param_groups[0]['lr']]
         results = log(results, logging)
 
 def validate(validation_loader, model, val_results):
+    # Do 50 forward passes as a val 
     for i in range(50):
         x = next(iter(validation_loader)).to(device)
         (recon_loss, codebook, commitment, compression, mask_loss), x_hat, codebook_used, corr_token, gates, g_under_half, pred_masks, masks = model(x, iter=results['n_updates'], hardset=args.hardset)
@@ -142,12 +150,14 @@ if __name__ == "__main__":
     model = TokenAE(args.input_len, args.codebook_dim, args.embedding_dim, args.n_embeddings, args.kernel_size, args.vocab_size, args.alpha, args.beta, args.gamma).to(device)
     # optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, amsgrad=True, weight_decay=args.weight_decay)
     
+    # Updated optimizer that provides different learning rates for the VQ and the model
     base_params = [p for name, p in model.named_parameters() if not name.startswith("vector_quantization")]
     optimizer = optim.Adam([
     {'params': base_params, 'lr': args.learning_rate, 'amsgrad':True, 'weight_decay':args.weight_decay}, 
     {'params': model.vector_quantization.parameters(), 'lr': args.learning_rate * 10, 'amsgrad':True, 'weight_decay':args.weight_decay}  
     ])
 
+    # Actually do the learning rate scheduling
     warmup_steps = 1000  # Number of warmup steps
     total_steps = len(training_loader)  # Total training steps
     warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_steps)
@@ -155,8 +165,7 @@ if __name__ == "__main__":
     scheduler = SequentialLR(optimizer, schedulers=[warmup_scheduler, cosine_scheduler], milestones=[warmup_steps])
     # scheduler = CosWithWarmup(optimizer, warmup_steps=1000, max_steps=len(training_loader), alpha_f=0.1)
 
-    # set model to train mode 
-    
+    # Results to handle    
     results = {
         'n_updates': 0,
         'total loss': [],
